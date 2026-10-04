@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+.env
+.idea/
+vitest.config.ts.timestamp-*
+
+# state file temp writes
+*.tmp
+.DS_Store

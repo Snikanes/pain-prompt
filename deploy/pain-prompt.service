@@ -1,0 +1,22 @@
+# systemd *user* unit. Install with:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/pain-prompt.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now pain-prompt
+#   sudo loginctl enable-linger "$USER"   # keep it running when you're logged out
+[Unit]
+Description=pain-prompt: Discord pain check-ins logged to Intervals.icu
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/pain-prompt
+# Must be an absolute path; check with `command -v node` (Node 22+ required).
+ExecStart=/usr/bin/node dist/main.js
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
