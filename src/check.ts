@@ -18,7 +18,7 @@ async function check(): Promise<void> {
   console.log(`intervals.icu ok · ${all.length} activities in the last 7 days, ${runs.length} counted as runs`);
   for (const r of runs) {
     console.log(
-      `  ${r.id}  ${r.startDateLocal}  (start ${startInstant(r, config.timezone).toISOString()}, raw start_date "${r.startDate}")  ${r.name}  ${(r.distance / 1000).toFixed(1)} km`,
+      `  ${r.id}  ${r.startDateLocal}  (start ${startInstant(r, config.timezone).toISOString()}, raw start_date "${r.startDate}")  ${r.name}  ${(r.distance / 1000).toFixed(1)} km  RPE ${r.rpe ?? '-'}  feel ${r.feel ?? '-'}`,
     );
   }
 }

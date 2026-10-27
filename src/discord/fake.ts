@@ -1,6 +1,8 @@
+import type { EffortField } from '../state.js';
 import type {
   CommentEvent,
   DiscordGateway,
+  EffortEvent,
   MessageRef,
   PromptButtons,
   ScoreEvent,
@@ -20,15 +22,16 @@ export class FakeGateway implements DiscordGateway {
   failSends = false;
   private nextId = 1;
   private scoreHandler?: (event: ScoreEvent) => Promise<string>;
+  private effortHandler?: (event: EffortEvent) => Promise<string>;
   private commentHandler?: (event: CommentEvent) => Promise<string>;
 
   async start(): Promise<void> {}
   async stop(): Promise<void> {}
 
-  async sendPrompt(promptId: string, text: string): Promise<MessageRef> {
+  async sendPrompt(promptId: string, text: string, buttons: PromptButtons = 'scores'): Promise<MessageRef> {
     if (this.failSends) throw new Error('discord down');
     const ref = { channelId: 'chan', messageId: `m${this.nextId++}` };
-    this.messages.push({ ...ref, promptId, text, buttons: 'scores' });
+    this.messages.push({ ...ref, promptId, text, buttons });
     return ref;
   }
 
@@ -56,6 +59,10 @@ export class FakeGateway implements DiscordGateway {
     this.scoreHandler = handler;
   }
 
+  onEffort(handler: (event: EffortEvent) => Promise<string>): void {
+    this.effortHandler = handler;
+  }
+
   onComment(handler: (event: CommentEvent) => Promise<string>): void {
     this.commentHandler = handler;
   }
@@ -73,6 +80,11 @@ export class FakeGateway implements DiscordGateway {
   async click(promptId: string, score: number, userId = 'me'): Promise<string> {
     if (!this.scoreHandler) throw new Error('no score handler');
     return this.scoreHandler({ promptId, score, userId });
+  }
+
+  async effort(promptId: string, field: EffortField, value: number, userId = 'me'): Promise<string> {
+    if (!this.effortHandler) throw new Error('no effort handler');
+    return this.effortHandler({ promptId, field, value, userId });
   }
 
   async comment(promptId: string, text: string, userId = 'me'): Promise<string> {

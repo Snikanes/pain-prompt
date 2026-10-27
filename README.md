@@ -2,11 +2,14 @@
 
 A small Discord bot for coming back from an injury. It asks for a 0–10 pain
 score at the right moments and saves each answer as a note in Intervals.icu.
+After each run it also asks for RPE and feel, and saves them in the run's own
+fields.
 
 | When | Question | Where the answer goes |
 |---|---|---|
 | 07:10 every day | Pain this morning? | Note on the latest run from yesterday or today. On a rest day, a calendar note called "Pain check" |
 | As soon as a new run appears in Intervals.icu | Pain during the run? | Note on that run |
+| Same time, as a separate message | RPE (1–10) and feel (Strong … Weak)? | The run's **Perceived exertion** and **Feel** fields |
 | 4 h after the run ended (configurable) | Pain right now? | Note on that run |
 
 You answer with one tap: green buttons for 0–2, blue for 3–4, red for 5+.
@@ -14,6 +17,12 @@ After answering, an **Add comment** button lets you write a sentence, which is
 saved the same way. A prompt you haven't answered gets one reminder after
 45 min. After 20 h its buttons are removed, and a new morning prompt replaces
 the previous one.
+
+RPE and feel are saved as soon as you tap each one. If your watch's
+self-evaluation already filled in a field (Garmin writes it into the FIT file
+when you save the run), the bot doesn't ask for it, and if both are filled in
+there's no message at all. Enter self-evaluation on the watch, not later in
+Garmin Connect: edits made in Garmin Connect don't reach Intervals.icu.
 
 Notes always use the same format, so you can read them easily and a script
 (or Claude) can parse them:
@@ -23,6 +32,7 @@ Notes always use the same format, so you can read them easily and a script
 [pain] during=0/10
 [pain] after=2/10
 [pain] morning comment: stiff on the stairs, fine after 5 min
+[effort] comment: legs heavy from yesterday
 ```
 
 ## Setup
@@ -84,6 +94,9 @@ systemctl --user kill -s USR1 pain-prompt
   down when a prompt is due, it's retried every minute.
 - **State:** stored in `data/state.json`. Writes are atomic, and old entries
   are pruned after 14 days.
+- **Strava:** Intervals.icu doesn't let the API edit activities imported from
+  Strava, so RPE and feel can only be saved on runs that come in directly
+  (e.g. from Garmin). Turn the effort prompt off with `PAIN_PROMPT_EFFORT=false`.
 - **Activity types:** only Intervals.icu types in `PAIN_ACTIVITY_TYPES`
   count (default `Run,TrailRun,VirtualRun`).
 

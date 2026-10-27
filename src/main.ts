@@ -26,6 +26,7 @@ async function main(): Promise<void> {
       maxRunAgeHours: config.maxRunAgeHours,
       activityTypes: config.activityTypes,
       promptDuring: config.promptDuring,
+      promptEffort: config.promptEffort,
     },
     intervals: new IntervalsClient(config.intervals),
     gateway,

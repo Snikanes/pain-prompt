@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeGateway } from '../src/discord/fake.js';
-import type { Activity, CalendarNote, IntervalsApi } from '../src/intervals.js';
+import type { Activity, ActivityPatch, CalendarNote, IntervalsApi } from '../src/intervals.js';
 import { PainService, PROMPT_TTL_MS, type ServiceSettings } from '../src/service.js';
 import { MemoryStore } from '../src/state.js';
 import { HOUR, MINUTE } from '../src/time.js';
@@ -9,6 +9,7 @@ class FakeIntervals implements IntervalsApi {
   activities: Activity[] = [];
   messages: { activityId: string; content: string }[] = [];
   notes: CalendarNote[] = [];
+  updates: { activityId: string; patch: ActivityPatch }[] = [];
   failWrites = false;
   async listActivities(oldest: string, newest: string): Promise<Activity[]> {
     return this.activities.filter(
@@ -18,6 +19,10 @@ class FakeIntervals implements IntervalsApi {
   async addActivityMessage(activityId: string, content: string): Promise<void> {
     if (this.failWrites) throw new Error('intervals down');
     this.messages.push({ activityId, content });
+  }
+  async updateActivity(activityId: string, patch: ActivityPatch): Promise<void> {
+    if (this.failWrites) throw new Error('intervals down');
+    this.updates.push({ activityId, patch });
   }
   async createNote(date: string, name: string, description: string): Promise<CalendarNote> {
     if (this.failWrites) throw new Error('intervals down');
@@ -40,6 +45,7 @@ const settings: ServiceSettings = {
   maxRunAgeHours: 12,
   activityTypes: ['Run'],
   promptDuring: true,
+  promptEffort: false,
 };
 
 /** A run starting at the given UTC time (Oslo is UTC+2 in October). */
@@ -236,5 +242,73 @@ describe('reminders, retries and guards', () => {
   it('gives advice that matches the pain rules', async () => {
     await service.morning();
     expect(await gateway.click(gateway.prompts()[0]!.promptId!, 4)).toContain('repeat last week');
+  });
+});
+
+describe('effort prompt', () => {
+  beforeEach(async () => {
+    service = new PainService({ settings: { ...settings, promptEffort: true }, intervals, gateway, store, now: () => clock });
+    await service.poll(); // initialise
+    at('2026-10-05T16:00:00Z');
+  });
+
+  const effortPrompt = () => gateway.prompts().find((m) => m.text.includes('💪'))!;
+
+  it('asks for RPE and feel right after the run, and writes each field', async () => {
+    intervals.activities = [run('i2', '2026-10-05T15:20:00Z')];
+    await service.poll();
+    const p = effortPrompt();
+    expect(p.text).toContain('<@me>');
+    expect(p.text).toContain('7–8 hard');
+    expect(p.buttons).toEqual({ effort: ['rpe', 'feel'] });
+
+    expect(await gateway.effort(p.promptId!, 'rpe', 6)).toBe('Logged RPE 6/10 on Oslo Running (5.0 km).');
+    expect(effortPrompt().buttons).toEqual({ effort: ['feel'] });
+    expect(await gateway.effort(p.promptId!, 'feel', 2)).toContain('feel Good');
+    expect(intervals.updates).toEqual([
+      { activityId: 'i2', patch: { icu_rpe: 6 } },
+      { activityId: 'i2', patch: { feel: 2 } },
+    ]);
+    expect(effortPrompt().buttons).toBe('comment');
+    expect(effortPrompt().text).toContain('**RPE 6/10**, **feel Good** logged');
+
+    await gateway.comment(p.promptId!, 'legs heavy');
+    expect(intervals.messages).toEqual([{ activityId: 'i2', content: '[effort] comment: legs heavy' }]);
+  });
+
+  it('only asks for what the watch did not set', async () => {
+    intervals.activities = [
+      { ...run('a', '2026-10-05T15:20:00Z'), rpe: 5 },
+      { ...run('b', '2026-10-05T15:10:00Z'), rpe: 5, feel: 2 },
+    ];
+    await service.poll();
+    const efforts = gateway.prompts().filter((m) => m.text.includes('💪'));
+    expect(efforts).toHaveLength(1);
+    expect(efforts[0]!.buttons).toEqual({ effort: ['feel'] });
+    expect(efforts[0]!.text).not.toContain('RPE');
+  });
+
+  it('keeps the buttons when Intervals.icu fails, and ignores a second tap', async () => {
+    intervals.activities = [run('i2', '2026-10-05T15:20:00Z')];
+    await service.poll();
+    const id = effortPrompt().promptId!;
+    intervals.failWrites = true;
+    await expect(gateway.effort(id, 'rpe', 7)).rejects.toThrow('intervals down');
+    expect(effortPrompt().buttons).toEqual({ effort: ['rpe', 'feel'] });
+    intervals.failWrites = false;
+    await gateway.effort(id, 'rpe', 7);
+    expect(await gateway.effort(id, 'rpe', 8)).toContain('Already logged RPE 7/10');
+    expect(intervals.updates).toHaveLength(1);
+  });
+
+  it('shows what was saved when it expires half answered', async () => {
+    intervals.activities = [run('i2', '2026-10-05T15:20:00Z')];
+    await service.poll();
+    await gateway.effort(effortPrompt().promptId!, 'rpe', 7);
+    advance(PROMPT_TTL_MS + MINUTE);
+    await service.tick();
+    expect(effortPrompt().buttons).toBe('none');
+    expect(effortPrompt().text).toContain('**RPE 7/10** logged');
+    expect(effortPrompt().text).toContain('*Expired.*');
   });
 });

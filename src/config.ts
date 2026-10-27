@@ -44,6 +44,8 @@ const envSchema = z.object({
   PAIN_ACTIVITY_TYPES: z.string().default('Run,TrailRun,VirtualRun'),
   /** prompt "during" right away when a run is found */
   PAIN_PROMPT_DURING: bool.default('true'),
+  /** ask for RPE and feel when a run is found (skipped if the watch already set them) */
+  PAIN_PROMPT_EFFORT: bool.default('true'),
 
   PAIN_STATE_PATH: z.string().min(1).default('./data/state.json'),
   PAIN_LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug']).default('info'),
@@ -61,6 +63,7 @@ export interface Config {
   maxRunAgeHours: number;
   activityTypes: string[];
   promptDuring: boolean;
+  promptEffort: boolean;
   statePath: string;
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug';
 }
@@ -102,6 +105,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       .map((t) => t.trim())
       .filter(Boolean),
     promptDuring: e.PAIN_PROMPT_DURING,
+    promptEffort: e.PAIN_PROMPT_EFFORT,
     statePath: e.PAIN_STATE_PATH,
     logLevel: e.PAIN_LOG_LEVEL,
   };

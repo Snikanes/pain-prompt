@@ -1,8 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import type { Logger } from 'pino';
-import type { DiscordGateway, MessageRef } from './discord/gateway.js';
+import type { DiscordGateway, MessageRef, PromptButtons } from './discord/gateway.js';
 import type { Activity, IntervalsApi } from './intervals.js';
-import { prune, type NoteTarget, type Prompt, type PromptKind, type State, type StateStore } from './state.js';
+import {
+  FEEL_LABELS,
+  prune,
+  type EffortField,
+  type NoteTarget, type Prompt, type PromptKind, type State, type StateStore } from './state.js';
 import { HOUR, MINUTE, addDays, hasZone, localDate, zonedToInstant } from './time.js';
 
 export interface ServiceSettings {
@@ -14,6 +18,8 @@ export interface ServiceSettings {
   maxRunAgeHours: number;
   activityTypes: string[];
   promptDuring: boolean;
+  /** ask for RPE and feel when a run is found, unless the watch already set them */
+  promptEffort: boolean;
 }
 
 export interface ServiceDeps {
@@ -36,7 +42,11 @@ export function scoreNote(kind: PromptKind, score: number): string {
 }
 
 export function commentNote(kind: PromptKind, text: string): string {
-  return `[pain] ${kind} comment: ${text}`;
+  return kind === 'effort' ? `[effort] comment: ${text}` : `[pain] ${kind} comment: ${text}`;
+}
+
+function effortText(field: EffortField, value: number): string {
+  return field === 'rpe' ? `RPE ${value}/10` : `feel ${FEEL_LABELS[value - 1] ?? value}`;
 }
 
 /** When the run started, trusting the local wall-clock time if start_date has no zone. */
@@ -68,6 +78,7 @@ export class PainService {
     this.log = deps.logger ?? NOOP;
     this.now = deps.now ?? (() => new Date());
     deps.gateway.onScore((e) => this.handleScore(e.promptId, e.score, e.userId));
+    deps.gateway.onEffort((e) => this.handleEffort(e.promptId, e.field, e.value, e.userId));
     deps.gateway.onComment((e) => this.handleComment(e.promptId, e.text, e.userId));
   }
 
@@ -130,6 +141,12 @@ export class PainService {
         };
         this.log.info({ activity: run.id, name: run.name }, 'new run found');
         if (this.s.promptDuring) state.prompts.push(this.newPrompt('during', target, now));
+        if (this.s.promptEffort) {
+          // The watch's self-evaluation arrives in the same FIT file as the run, so this is final.
+          const asks = (['rpe', 'feel'] as const).filter((f) => run[f] === undefined);
+          if (asks.length > 0) state.prompts.push({ ...this.newPrompt('effort', target, now), asks });
+          else this.log.info({ activity: run.id }, 'RPE and feel already set, not asking');
+        }
         if (this.s.postRunDelayMinutes > 0) {
           const due = new Date(Math.max(endedAt + this.s.postRunDelayMinutes * MINUTE, now.getTime()));
           state.prompts.push(this.newPrompt('after', target, due));
@@ -163,6 +180,32 @@ export class PainService {
       prompt.answeredAt = this.now().toISOString();
       await this.refreshMessage(prompt);
       return `Logged ${score}/10 ${this.whereText(prompt)}.${adviceFor(score)}`;
+    });
+  }
+
+  handleEffort(promptId: string, field: EffortField, value: number, userId: string): Promise<string> {
+    return this.exclusive(async (state) => {
+      if (userId !== this.s.userId) return 'These prompts are not for you 🙂';
+      const prompt = state.prompts.find((p) => p.id === promptId);
+      if (!prompt || prompt.kind !== 'effort' || prompt.target.kind !== 'activity') {
+        return 'That prompt is too old, nothing was saved.';
+      }
+      const logged = prompt[field];
+      if (logged !== undefined) return `Already logged ${effortText(field, logged)} for this one.`;
+      if (prompt.status !== 'open') return 'That prompt has expired, nothing was saved.';
+
+      // Write first: if Intervals.icu is down, the buttons stay so you can retry.
+      await this.deps.intervals.updateActivity(
+        prompt.target.activityId,
+        field === 'rpe' ? { icu_rpe: value } : { feel: value },
+      );
+      prompt[field] = value;
+      if (this.remaining(prompt).length === 0) {
+        prompt.status = 'answered';
+        prompt.answeredAt = this.now().toISOString();
+      }
+      await this.refreshMessage(prompt);
+      return `Logged ${effortText(field, value)} ${this.whereText(prompt)}.`;
     });
   }
 
@@ -205,7 +248,7 @@ export class PainService {
 
   private async send(prompt: Prompt): Promise<void> {
     try {
-      const ref = await this.deps.gateway.sendPrompt(prompt.id, this.promptText(prompt));
+      const ref = await this.deps.gateway.sendPrompt(prompt.id, this.promptText(prompt), this.buttons(prompt));
       prompt.status = 'open';
       prompt.sentAt = this.now().toISOString();
       prompt.channelId = ref.channelId;
@@ -220,9 +263,12 @@ export class PainService {
   private async expire(p: Prompt): Promise<void> {
     p.status = 'expired';
     if (!p.messageId) return;
-    await this.safely('expire', () =>
-      this.deps.gateway.updatePrompt(this.ref(p), p.id, `${this.promptText(p, false)}\n*Expired, nothing logged.*`, 'none'),
-    );
+    // An effort prompt can expire with one of its two answers saved.
+    const logged = this.loggedText(p);
+    const text = logged
+      ? `${this.promptText(p, false)}\n✅ ${logged} logged ${this.whereText(p)}.\n*Expired.*`
+      : `${this.promptText(p, false)}\n*Expired, nothing logged.*`;
+    await this.safely('expire', () => this.deps.gateway.updatePrompt(this.ref(p), p.id, text, 'none'));
   }
 
   private async refreshMessage(p: Prompt): Promise<void> {
@@ -231,8 +277,8 @@ export class PainService {
       this.deps.gateway.updatePrompt(
         this.ref(p),
         p.id,
-        `${this.promptText(p, false)}\n✅ **${p.score}/10** logged ${this.whereText(p)}.`,
-        'comment',
+        `${this.promptText(p, false)}\n✅ ${this.loggedText(p)} logged ${this.whereText(p)}.`,
+        p.status === 'answered' ? 'comment' : this.buttons(p),
       ),
     );
   }
@@ -267,17 +313,43 @@ export class PainService {
         return `${this.s.area} pain **right now**, ${hoursText(this.s.postRunDelayMinutes)} after the run, 0–10?`;
       case 'morning':
         return `${this.s.area} pain **this morning**, 0–10? Test it on the stairs or with a slow single-leg squat.`;
+      case 'effort': {
+        const asks = (p.asks ?? []).map((f) => (f === 'rpe' ? '**effort** (RPE 1–10)' : '**feel**'));
+        return `how was the run? Rate ${asks.join(' and ')}.`;
+      }
     }
+  }
+
+  private remaining(p: Prompt): EffortField[] {
+    return (p.asks ?? []).filter((f) => p[f] === undefined);
+  }
+
+  private buttons(p: Prompt): PromptButtons {
+    return p.kind === 'effort' ? { effort: this.remaining(p) } : 'scores';
+  }
+
+  /** What has been saved so far, e.g. "**2/10**" or "**RPE 6/10**, **feel Good**"; empty if nothing. */
+  private loggedText(p: Prompt): string {
+    if (p.kind !== 'effort') return p.score === undefined ? '' : `**${p.score}/10**`;
+    return (p.asks ?? [])
+      .flatMap((f) => {
+        const v = p[f];
+        return v === undefined ? [] : [`**${effortText(f, v)}**`];
+      })
+      .join(', ');
   }
 
   private promptText(p: Prompt, mention = true): string {
     const who = mention ? `<@${this.s.userId}> ` : '';
-    const icon = p.kind === 'morning' ? '☀️' : p.kind === 'during' ? '🏃' : '⏱️';
+    const icon = { morning: '☀️', during: '🏃', after: '⏱️', effort: '💪' }[p.kind];
+    const scale = p.asks?.includes('rpe')
+      ? '\n-# RPE: 1–2 very easy · 3–4 easy · 5–6 moderate · 7–8 hard · 9 very hard · 10 max'
+      : '';
     const about =
       p.target.kind === 'activity'
         ? `**${p.target.activityName}**, ${p.target.activityDate}`
         : `no run since yesterday, saved as a calendar note for ${p.target.date}`;
-    return `${who}${icon} ${capitalize(this.question(p))}\n-# ${about}`;
+    return `${who}${icon} ${capitalize(this.question(p))}${scale}\n-# ${about}`;
   }
 
   private whereText(p: Prompt): string {

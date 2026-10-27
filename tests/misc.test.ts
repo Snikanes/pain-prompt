@@ -42,6 +42,9 @@ describe('discord custom ids', () => {
   it('round-trips', () => {
     expect(parseCustomId(ids.score('abc', 7))).toEqual({ type: 'score', promptId: 'abc', score: 7 });
     expect(parseCustomId(ids.comment('abc'))).toEqual({ type: 'comment', promptId: 'abc' });
+    expect(parseCustomId(ids.effort('abc', 'feel', 5))).toEqual({ type: 'effort', promptId: 'abc', field: 'feel', value: 5 });
+    expect(parseCustomId('pp:effort:abc:feel:6')).toBeNull();
+    expect(parseCustomId('pp:effort:abc:rpe:0')).toBeNull();
     expect(parseCustomId('pp:score:abc:11')).toBeNull();
     expect(parseCustomId('other:thing')).toBeNull();
   });
@@ -49,6 +52,8 @@ describe('discord custom ids', () => {
     const rows = buildRows('p', 'scores').map((r) => r.components.length);
     expect(rows).toEqual([5, 5, 1]);
     expect(buildRows('p', 'none')).toEqual([]);
+    expect(buildRows('p', { effort: ['rpe', 'feel'] }).map((r) => r.components.length)).toEqual([5, 5, 5]);
+    expect(buildRows('p', { effort: ['feel'] }).map((r) => r.components.length)).toEqual([5]);
   });
 });
 
@@ -70,7 +75,7 @@ describe('intervals client', () => {
       calls.push({ url, init });
       return new Response(
         JSON.stringify([
-          { id: 'i9', type: 'Run', name: 'Easy', start_date: '2026-10-04T06:13:30Z', start_date_local: '2026-10-04T08:13:30', elapsed_time: 2038, distance: 5014 },
+          { id: 'i9', type: 'Run', name: 'Easy', start_date: '2026-10-04T06:13:30Z', start_date_local: '2026-10-04T08:13:30', elapsed_time: 2038, distance: 5014, icu_rpe: 6, feel: null },
           { id: 'broken' },
         ]),
       );
@@ -79,10 +84,24 @@ describe('intervals client', () => {
     const acts = await client.listActivities('2026-10-03', '2026-10-04');
     expect(acts).toHaveLength(1);
     expect(acts[0]!.elapsedTime).toBe(2038);
+    expect(acts[0]!.rpe).toBe(6);
+    expect(acts[0]!.feel).toBeUndefined();
     expect(calls[0]!.url).toBe('https://x/api/v1/athlete/i1/activities?oldest=2026-10-03&newest=2026-10-04');
     expect((calls[0]!.init.headers as Record<string, string>).Authorization).toBe(
       `Basic ${Buffer.from('API_KEY:secret').toString('base64')}`,
     );
+  });
+  it('updates RPE and feel with a PUT on the activity', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response('{}');
+    }) as unknown as typeof fetch;
+    const client = new IntervalsClient({ apiKey: 'k', athleteId: 'i1', baseUrl: 'https://x', fetchImpl });
+    await client.updateActivity('i9', { icu_rpe: 7 });
+    expect(calls[0]!.url).toBe('https://x/activity/i9');
+    expect(calls[0]!.init.method).toBe('PUT');
+    expect(calls[0]!.init.body).toBe('{"icu_rpe":7}');
   });
   it('throws on HTTP errors', async () => {
     const fetchImpl = (async () => new Response('nope', { status: 403 })) as unknown as typeof fetch;

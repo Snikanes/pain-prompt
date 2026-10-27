@@ -1,7 +1,13 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-export type PromptKind = 'during' | 'after' | 'morning';
+export type PromptKind = 'during' | 'after' | 'morning' | 'effort';
+
+/** Intervals.icu activity fields the effort prompt can fill in. */
+export type EffortField = 'rpe' | 'feel';
+
+/** Intervals.icu's feel scale, 1–5. */
+export const FEEL_LABELS = ['Strong', 'Good', 'Normal', 'Poor', 'Weak'];
 
 /** Where an answer is written in Intervals.icu. */
 export type NoteTarget =
@@ -22,6 +28,10 @@ export interface Prompt {
   messageId?: string;
   reminded: boolean;
   score?: number;
+  /** effort prompt: the fields that were missing when the run was found */
+  asks?: EffortField[];
+  rpe?: number;
+  feel?: number;
   answeredAt?: string;
   /** calendar note created for a day target, so a comment can be appended */
   noteEventId?: string;

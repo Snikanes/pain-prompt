@@ -3,12 +3,21 @@ export interface MessageRef {
   messageId: string;
 }
 
-/** Which buttons sit under a prompt message. */
-export type PromptButtons = 'scores' | 'comment' | 'none';
+import type { EffortField } from '../state.js';
+
+/** Which buttons sit under a prompt message. `effort` lists the rows still to answer. */
+export type PromptButtons = 'scores' | 'comment' | 'none' | { effort: EffortField[] };
 
 export interface ScoreEvent {
   promptId: string;
   score: number;
+  userId: string;
+}
+
+export interface EffortEvent {
+  promptId: string;
+  field: EffortField;
+  value: number;
   userId: string;
 }
 
@@ -25,8 +34,8 @@ export interface CommentEvent {
 export interface DiscordGateway {
   start(): Promise<void>;
   stop(): Promise<void>;
-  /** post a prompt with 0–10 buttons */
-  sendPrompt(promptId: string, text: string): Promise<MessageRef>;
+  /** post a prompt, with 0–10 buttons unless told otherwise */
+  sendPrompt(promptId: string, text: string, buttons?: PromptButtons): Promise<MessageRef>;
   /** rewrite a prompt and swap its buttons */
   updatePrompt(
     ref: MessageRef,
@@ -40,5 +49,6 @@ export interface DiscordGateway {
   notice(text: string): Promise<void>;
   /** the returned string is shown only to the clicker */
   onScore(handler: (event: ScoreEvent) => Promise<string>): void;
+  onEffort(handler: (event: EffortEvent) => Promise<string>): void;
   onComment(handler: (event: CommentEvent) => Promise<string>): void;
 }

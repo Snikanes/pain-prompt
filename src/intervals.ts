@@ -11,6 +11,16 @@ export interface Activity {
   elapsedTime: number;
   /** metres */
   distance: number;
+  /** perceived exertion 1–10 (icu_rpe), if already set, e.g. by the watch */
+  rpe?: number;
+  /** 1 strong … 5 weak, if already set */
+  feel?: number;
+}
+
+/** Activity fields this bot writes. */
+export interface ActivityPatch {
+  icu_rpe?: number;
+  feel?: number;
 }
 
 export interface CalendarNote {
@@ -25,6 +35,7 @@ export interface IntervalsApi {
   /** activities whose local start date is within [oldest, newest] (YYYY-MM-DD) */
   listActivities(oldest: string, newest: string): Promise<Activity[]>;
   addActivityMessage(activityId: string, content: string): Promise<void>;
+  updateActivity(activityId: string, patch: ActivityPatch): Promise<void>;
   createNote(date: string, name: string, description: string): Promise<CalendarNote>;
   updateNote(note: CalendarNote): Promise<void>;
 }
@@ -76,6 +87,10 @@ export class IntervalsClient implements IntervalsApi {
     await this.request('POST', `/activity/${encodeURIComponent(activityId)}/messages`, {
       content,
     });
+  }
+
+  async updateActivity(activityId: string, patch: ActivityPatch): Promise<void> {
+    await this.request('PUT', `/activity/${encodeURIComponent(activityId)}`, patch);
   }
 
   async createNote(date: string, name: string, description: string): Promise<CalendarNote> {
@@ -144,5 +159,12 @@ function toActivity(raw: unknown): Activity | null {
     startDateLocal: a.start_date_local,
     elapsedTime: typeof a.elapsed_time === 'number' ? a.elapsed_time : Number(a.moving_time ?? 0),
     distance: typeof a.distance === 'number' ? a.distance : 0,
+    ...(isSet(a.icu_rpe) ? { rpe: a.icu_rpe } : {}),
+    ...(isSet(a.feel) ? { feel: a.feel } : {}),
   };
+}
+
+/** Unset fields come back as null or 0; neither is a real RPE or feel. */
+function isSet(v: unknown): v is number {
+  return typeof v === 'number' && v > 0;
 }
